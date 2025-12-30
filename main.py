@@ -1,145 +1,127 @@
-import requests
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import time
-from dotenv import load_dotenv
-import os
 
-login_url = "https://archiveofourown.org/users/login"
+options = webdriver.ChromeOptions()
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
-session = requests.Session()
-
-response = session.get(login_url)
-if response.status_code == 200:
-
-    soup = BeautifulSoup(response.content, "html.parser")
-
-    token = soup.find("input", {"name": "authenticity_token"})["value"]
-else:
-    print("Failed to retrieve the login page.")
-    exit()
-
-load_dotenv()
-username = os.getenv("USER_NAME")
-password = os.getenv("PASSWORD")
-
-payload = {
-    "user[login]": username,
-    "user[password]": password,
-    "authenticity_token": token,
-    "commit": "Log in",
-}
-
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-    "Referer": login_url
-}
-
-login_response = session.post(login_url, data=payload, headers=headers)
+USERNAME = ""
+PASSWORD = ""
+MAX_PAGES = 21
 
 fic_data = []
 
-if login_response.status_code == 200:
-    print("Login attempt completed.")
+try:
+    driver.get("https://archiveofourown.org/users/login")
+    wait = WebDriverWait(driver, 10)
+    user_field = wait.until(EC.presence_of_element_located((By.ID, "user_login")))
+    pass_field = driver.find_element(By.ID, "user_password")
 
-    if "My Dashboard" in login_response.text:
-        print("Login successful!")
+    user_field.send_keys(USERNAME)
+    pass_field.send_keys(PASSWORD)
 
-        for i in range(1, 3):
-            time.sleep(5)
-            new_page_response = session.get(f'https://archiveofourown.org/users/{username}/readings?page={i}')
-            if new_page_response.status_code == 200:
-                print("Successfully accessed the new page.")
+    login_button = driver.find_element(By.CSS_SELECTOR, "#new_user input[name='commit']")
+    
+    driver.execute_script("arguments[0].click();", login_button)
 
-                page = BeautifulSoup(new_page_response.content, "html.parser")
+    wait.until(EC.presence_of_element_located((By.PARTIAL_LINK_TEXT, "Log Out")))
+    print("Login successful!")
 
-                raw_data = page.find("ol", class_="reading work index group")
-                raw_indiv_items = raw_data.find_all("li", role="article")
-                for item in raw_indiv_items:
-                    if item.find("div", class_="header module") == None:
-                        continue
+    for i in range(1, MAX_PAGES):
+        time.sleep(5)
+        driver.get(f'https://archiveofourown.org/users/{USERNAME}/readings?page={i}')
+        time.sleep(5)
 
-                    header = item.find("div", class_="header module")
-                    heading = header.find("h4")
-                    title = heading.find_all("a")[0].text
-                    raw_author = heading.find_all("a", rel="author")
-                    author = []
-                    if raw_author:
-                        for entry in raw_author:
-                            author.append(entry.text)
-                    else:
-                        author.append('Anonymous')
+        page = BeautifulSoup(driver.page_source, "html.parser")
 
-                    fandom_header = header.find("h5")
-                    raw_fandoms = fandom_header.find_all("a", class_="tag")
-                    fandoms = []
-                    for fandom in raw_fandoms:
-                        fandoms.append(fandom.text)
+        raw_data = page.find("ol", class_="reading work index group")
+        raw_indiv_items = raw_data.find_all("li", role="article")
+        for item in raw_indiv_items:
+            if item.find("div", class_="header module") == None:
+                continue
 
-                    required_tags = header.find("ul", class_="required-tags")
-                    raw_ratings = required_tags.find_all("li")[0]
-                    raw_pairings = required_tags.find_all("li")[2]
-                    ratings = raw_ratings.find("span", class_="text").text
-                    pairings = raw_pairings.find("span", class_="text").text
-
-                    raw_warnings = item.find("ul", class_="tags commas").find_all("li", class_="warnings")
-                    raw_relationships = item.find("ul", class_="tags commas").find_all("li", class_="relationships")
-                    raw_characters = item.find("ul", class_="tags commas").find_all("li", class_="characters")
-                    raw_freeforms = item.find("ul", class_="tags commas").find_all("li", class_="freeforms")
-
-                    warnings = []
-                    relationships = []
-                    characters = []
-                    freeforms = []
-
-                    for warning in raw_warnings:
-                        warnings.append(warning.find("a", class_="tag").text)
-                    for relationship in raw_relationships:
-                        relationships.append(relationship.find("a", class_="tag").text)
-                    for character in raw_characters:
-                        characters.append(character.find("a", class_="tag").text)
-                    for tag in raw_freeforms:
-                        freeforms.append(tag.find("a", class_="tag").text)
-
-                    raw_stats = item.find("dl", class_="stats")
-
-                    lang = raw_stats.find("dd", class_="language").text
-                    words = int(raw_stats.find("dd", class_="words").text.replace(",", ""))
-
-                    raw_footer = item.find("h4", class_="viewed heading").text.split("\n")
-                    listed_footer = list(filter(lambda x: x.strip(), raw_footer))
-                    raw_date = listed_footer[0].split(" ")
-                    raw_read_count = listed_footer[-1].split(" ")
-                    date = int(raw_date[-1])
-                    read_count = 0
-                    if raw_read_count[-2].isnumeric():
-                        read_count = int(raw_read_count[-2])
-                    else:
-                        read_count = 1
-
-                    fic_data.append({
-                        'title': title,
-                        'author(s)': author,
-                        'fandom(s)': fandoms,
-                        'ratings': ratings,
-                        'pairings': pairings,
-                        'warnings': warnings,
-                        'relationships': relationships,
-                        'characters': characters,
-                        'freeforms': freeforms,
-                        'language': lang,
-                        'word_count': words,
-                        'last_read': date,
-                        'read_count': read_count,
-                    })
+            header = item.find("div", class_="header module")
+            heading = header.find("h4")
+            title = heading.find_all("a")[0].text
+            raw_author = heading.find_all("a", rel="author")
+            author = []
+            if raw_author:
+                for entry in raw_author:
+                    author.append(entry.text)
             else:
-                print("Page traversal failed")
-                exit()
-    else:
-        print("Login failed. Check your credentials or the token.")
-else:
-    print(f"Login request failed with status code {login_response.status_code}")
+                author.append('Anonymous')
 
-key_val = [2024]
+            fandom_header = header.find("h5")
+            raw_fandoms = fandom_header.find_all("a", class_="tag")
+            fandoms = []
+            for fandom in raw_fandoms:
+                fandoms.append(fandom.text)
+
+            required_tags = header.find("ul", class_="required-tags")
+            raw_ratings = required_tags.find_all("li")[0]
+            raw_pairings = required_tags.find_all("li")[2]
+            ratings = raw_ratings.find("span", class_="text").text
+            pairings = raw_pairings.find("span", class_="text").text
+
+            raw_warnings = item.find("ul", class_="tags commas").find_all("li", class_="warnings")
+            raw_relationships = item.find("ul", class_="tags commas").find_all("li", class_="relationships")
+            raw_characters = item.find("ul", class_="tags commas").find_all("li", class_="characters")
+            raw_freeforms = item.find("ul", class_="tags commas").find_all("li", class_="freeforms")
+
+            warnings = []
+            relationships = []
+            characters = []
+            freeforms = []
+
+            for warning in raw_warnings:
+                warnings.append(warning.find("a", class_="tag").text)
+            for relationship in raw_relationships:
+                relationships.append(relationship.find("a", class_="tag").text)
+            for character in raw_characters:
+                characters.append(character.find("a", class_="tag").text)
+            for tag in raw_freeforms:
+                freeforms.append(tag.find("a", class_="tag").text)
+
+            raw_stats = item.find("dl", class_="stats")
+
+            lang = raw_stats.find("dd", class_="language").text
+            words = int(raw_stats.find("dd", class_="words").text.replace(",", ""))
+
+            raw_footer = item.find("h4", class_="viewed heading").text.split("\n")
+            listed_footer = list(filter(lambda x: x.strip(), raw_footer))
+            raw_date = listed_footer[0].split(" ")
+            raw_read_count = listed_footer[-1].split(" ")
+            date = int(raw_date[-1])
+            read_count = 0
+            if raw_read_count[-2].isnumeric():
+                read_count = int(raw_read_count[-2])
+            else:
+                read_count = 1
+
+            fic_data.append({
+                'title': title,
+                'author(s)': author,
+                'fandom(s)': fandoms,
+                'ratings': ratings,
+                'pairings': pairings,
+                'warnings': warnings,
+                'relationships': relationships,
+                'characters': characters,
+                'freeforms': freeforms,
+                'language': lang,
+                'word_count': words,
+                'last_read': date,
+                'read_count': read_count,
+            })
+finally:
+    driver.quit()
+
+key_val = [2025]
 filtered_data = list(filter(lambda x: x['last_read'] in key_val, fic_data))
 fic_data = filtered_data
 
